@@ -5,19 +5,34 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+
+from fastapi import FastAPI, HTTPException, Depends, Request, Response, status, Cookie, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 import os
 from pathlib import Path
+import secrets
+
 
 app = FastAPI(title="Mergington High School API",
-              description="API for viewing and signing up for extracurricular activities")
+              description="API for viewing and signing up for extracurricular activities with authentication support.")
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+
+# In-memory user database (username: {password, role})
+users = {
+    "admin": {"password": "adminpass", "role": "admin"},
+    "teacher1": {"password": "teachpass1", "role": "staff"},
+    "student1": {"password": "studpass1", "role": "student"},
+    "student2": {"password": "studpass2", "role": "student"}
+}
+
+# In-memory session store: session_id -> username
+sessions = {}
 
 # In-memory activity database
 activities = {
@@ -76,6 +91,40 @@ activities = {
         "participants": ["charlotte@mergington.edu", "henry@mergington.edu"]
     }
 }
+def get_current_user(session_id: str = Cookie(default=None)):
+    if session_id and session_id in sessions:
+        username = sessions[session_id]
+        user = users.get(username)
+        if user:
+            return {"username": username, "role": user["role"]}
+    return None
+
+@app.post("/login")
+def login(response: Response, username: str = Form(...), password: str = Form(...)):
+    user = users.get(username)
+    if not user or user["password"] != password:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    # Create a session
+    session_id = secrets.token_hex(16)
+    sessions[session_id] = username
+    response.set_cookie(key="session_id", value=session_id, httponly=True)
+    return {"message": f"Logged in as {username}", "role": user["role"]}
+
+
+@app.post("/logout")
+def logout(response: Response, session_id: str = Cookie(default=None)):
+    if session_id and session_id in sessions:
+        del sessions[session_id]
+        response.delete_cookie(key="session_id")
+        return {"message": "Logged out"}
+    raise HTTPException(status_code=401, detail="Not logged in")
+
+
+@app.get("/me")
+def get_me(user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return user
 
 
 @app.get("/")
